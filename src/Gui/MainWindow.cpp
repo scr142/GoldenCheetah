@@ -1569,8 +1569,8 @@ MainWindow::importFile()
         lastDir = QFileInfo(fileNames.front()).absolutePath();
         appsettings->setValue(GC_SETTINGS_LAST_IMPORT_PATH, lastDir);
         QStringList fileNamesCopy = fileNames; // QT doc says iterate over a copy
-        RideImportWizard *import = new RideImportWizard(fileNamesCopy, currentTab->context);
-        import->process();
+        RideImportWizard *importWiz = new RideImportWizard(fileNamesCopy, currentTab->context);
+        importWiz->process();
     }
 }
 
