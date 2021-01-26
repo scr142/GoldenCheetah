@@ -33,16 +33,25 @@
 #include "Context.h"
 #include "RideAutoImportConfig.h"
 
+typedef enum {
+    DO_NOT_COPY_ON_IMPORT = 0,
+    COPY_ON_IMPORT,
+    ALWAYS_IGNORE_ON_IMPORT,
+} importCopyType;
+
 // Utility class to associate the imported filename with whether it should be backed up in the Imports directory upon successful importation
 class ImportFile {
 
 public:
+
     QString name;
-    bool copyOnImport;
+    importCopyType copyOnImport;
 
     ImportFile(); 
-    ImportFile(const QString& name);
-    ImportFile(const QString& name, bool copyOnImport);
+    ImportFile(const QString& name, bool copyOnImport = true);
+
+    static importCopyType stringToCopyType(const QString& importString);
+    static QString copyTypeToString(const importCopyType importCopy);
 };
 
 // Dialog class to show filenames, import progress and to capture user input
@@ -81,6 +90,8 @@ private slots:
 private:
     void init(QList<ImportFile> files, Context *context);
     bool moveFile(const QString &source, const QString &target);
+    bool isFileExcludedFromImportation(const int i);
+    void addFileToImportExclusionList(const QString& importExcludedFile);
     void copySourceFileToImportDir(const ImportFile& source, const QString& importsTarget, const int i, bool srcInImportsDir);
 
     QList <ImportFile> filenames; // list of filenames passed
@@ -137,6 +148,7 @@ public:
 private slots:
     void commitAndCloseTimeEditor();
     void commitAndCloseDateEditor();
+    void commitAndCloseAutoImportEditor(int index);
 
 private:
     int dateColumn; // date is always followed by time
