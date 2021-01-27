@@ -1349,11 +1349,11 @@ RideImportWizard::addFileToImportExclusionList(const QString& importExcludedFile
         exclusionList.close();
     }
 
-    // open the exclusion list or create one if it doesn't exist
+    // open the exclusion list or Qt will create one if it doesn't exist
     if (exclusionList.open(QIODevice::ReadWrite | QIODevice::Append | QIODevice::Text)) {
 
         // Add the file on its own line
-        QFile excludedFile = importExcludedFile + "\n";
+        QFile excludedFile(QString(importExcludedFile) + "\n");
         const char* excludedFileChars(excludedFile.fileName().toStdString().c_str());
         exclusionList.write(excludedFileChars, qstrlen(excludedFileChars));
         exclusionList.close();
