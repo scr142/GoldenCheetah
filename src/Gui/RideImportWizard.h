@@ -44,8 +44,17 @@ class ImportFile {
 
 public:
 
-    QString name;
+    QString activityFullSource;
     importCopyType copyOnImport;
+
+    // These attributes are populated for files that can be imported
+    // i.e. no errors, no exclusion, no duplicates in activities
+    int tableRow;
+    QDateTime ridedatetime;
+    QString targetNoSuffix;
+    QString targetWithSuffix;
+    QString tmpActivitiesFulltarget;
+    QString finalActivitiesFulltarget;
 
     ImportFile(); 
     ImportFile(const QString& name, bool copyOnImport = true);
@@ -92,7 +101,7 @@ private:
     bool moveFile(const QString &source, const QString &target);
     bool isFileExcludedFromImportation(const int i);
     void addFileToImportExclusionList(const QString& importExcludedFile);
-    void copySourceFileToImportDir(const ImportFile& source, const QString& importsTarget, const int i, bool srcInImportsDir);
+    void copySourceFileToImportDir(const ImportFile& source, const QString& importsTarget, bool srcInImportsDir);
 
     QList <ImportFile> filenames; // list of filenames passed
     int numberOfFiles; // number of files to be processed

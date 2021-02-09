@@ -44,10 +44,11 @@
 #include <QMessageBox>
 
 ImportFile::ImportFile() :
-    name(""), copyOnImport(COPY_ON_IMPORT) {}
+    activityFullSource(""), copyOnImport(COPY_ON_IMPORT) {}
 
 ImportFile::ImportFile(const QString& fileName, bool copyFileOnImport) :
-    name(fileName), copyOnImport(copyFileOnImport ? COPY_ON_IMPORT : DO_NOT_COPY_ON_IMPORT) {}
+    activityFullSource(fileName), copyOnImport(copyFileOnImport ? COPY_ON_IMPORT : DO_NOT_COPY_ON_IMPORT) {}
+
 
 importCopyType ImportFile::stringToCopyType(const QString& importString)
 {
@@ -406,16 +407,16 @@ RideImportWizard::init(QList<ImportFile> original, Context * /*mainWindow*/)
     for (int i=0; i < files.count(); i++) {
         QTableWidgetItem *t;
 
-        filenames.append(ImportFile(QFileInfo(files[i].name).canonicalFilePath(),
+        filenames.append(ImportFile(QFileInfo(files[i].activityFullSource).canonicalFilePath(),
                          (files[i].copyOnImport ? COPY_ON_IMPORT : DO_NOT_COPY_ON_IMPORT)));
         blanks.append(true); // by default editable
 
         // Filename
         t = new QTableWidgetItem();
         if (autoImportMode)
-            t->setText(QFileInfo(files[i].name).canonicalFilePath());
+            t->setText(QFileInfo(files[i].activityFullSource).canonicalFilePath());
         else
-            t->setText(QFileInfo(files[i].name).fileName());
+            t->setText(QFileInfo(files[i].activityFullSource).fileName());
         t->setFlags(t->flags() & (~Qt::ItemIsEditable));
         tableWidget->setItem(i,FILENAME_COLUMN,t);
 
@@ -520,19 +521,18 @@ RideImportWizard::expandFiles(QList<ImportFile> files)
 
     foreach(ImportFile impFile, files) {
 
-        if (archives.exactMatch(QFileInfo(impFile.name).suffix())) {
+        if (archives.exactMatch(QFileInfo(impFile.activityFullSource).suffix())) {
             // its an archive so lets check - but only to one depth
             // archives that contain archives can get in the sea
-            QList<QString> contents = Archive::dir(impFile.name);
+            QList<QString> contents = Archive::dir(impFile.activityFullSource);
             if (contents.count() == 0) {
                 expanded.append(impFile);
             } else {
                 // we need to extract the contents and return those
-                QStringList ex = Archive::extract(impFile.name, contents, const_cast<AthleteDirectoryStructure*>(context->athlete->directoryStructure())->tmpActivities().absolutePath());
+                QStringList ex = Archive::extract(impFile.activityFullSource, contents, const_cast<AthleteDirectoryStructure*>(context->athlete->directoryStructure())->tmpActivities().absolutePath());
                 deleteMe += ex;
                 foreach(QString exfile, ex) { expanded.append(ImportFile(exfile, impFile.copyOnImport)); }
             }
-
         } else {
             expanded.append(impFile);
         }
@@ -564,7 +564,7 @@ RideImportWizard::process()
     //         1. checking if a file is readable
     //         2. parsing it with the RideFileReader
     //         3. [optional] collect date/time information from user
-    //         4. copy file into Library
+    //         4. Discard duplicates, excluded files and those with errors, then copy the valid files into Library
     //         5. Process for CPI (not implemented yet)
 
     // So, therefore the progress bar runs from 0 to files*4. (since step 5 is not implemented yet)
@@ -576,7 +576,8 @@ RideImportWizard::process()
     for (int i=0; i < filenames.count(); i++) {
 
         // get fullpath name for processing
-        QFileInfo thisfile(filenames[i].name);
+        QFileInfo thisfile(filenames[i].activityFullSource);
+
         if (!thisfile.exists())  tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - File does not exist."));
         else if (!thisfile.isFile())  tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - Not a file."));
         else if (!thisfile.isReadable())  tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - File is not readable."));
@@ -646,7 +647,7 @@ RideImportWizard::process()
        }
 
        QStringList errors;
-       QFile thisfile(filenames[i].name);
+       QFile thisfile(filenames[i].activityFullSource);
 
        tableWidget->item(i, STATUS_COLUMN)->setText(tr("Parsing..."));
        tableWidget->setCurrentCell(i, STATUS_COLUMN);
@@ -659,7 +660,7 @@ RideImportWizard::process()
        QList<RideFile*> rides;
        RideFile* ride = RideFileFactory::instance().openRideFile(context, thisfile, errors, &rides);
 
-       // is this an archive of files?
+       // does "thisfile" contain more than one ride?
        if (rides.count() > 1) {
 
            int here = i;
@@ -690,8 +691,9 @@ RideImportWizard::process()
                deleteMe.append(fulltarget);
                delete extracted;
 
-               // now add each temporary file ...
-               filenames.insert(here, fulltarget);
+               // now add each temporary file, with importation the same as its parent file ...
+               ImportFile insFile(fulltarget, filenames[i].copyOnImport);
+               filenames.insert(here, insFile);
                blanks.insert(here, true); // by default editable
                tableWidget->insertRow(here + counter);
 
@@ -844,7 +846,7 @@ RideImportWizard::process()
         QTableWidgetItem *t = tableWidget->item(i,STATUS_COLUMN);
         if (t->text().startsWith(tr("Error"))) continue;
 
-        // ignore the excluded import files that don't have dates or times processed.
+        // ignore the excluded import files, as these don't need dates or times to be entered by the user.
         if (filenames[i].copyOnImport == importCopyType::ALWAYS_IGNORE_ON_IMPORT) continue;
 
         if (blanks[i]) needdates++; // count the blanks tho -- these MUST be edited
@@ -1122,49 +1124,52 @@ RideImportWizard::abortClicked()
     QChar zero = QLatin1Char ( '0' );
 
     // Count the number of successfully imported files
-    int successfulImports = 0;
+
     int excludedImports = 0;
     int alreadyExists = 0;
     int importsErrors = 0;
+    QList <ImportFile> validFilenames;
 
-    // Saving now - process the files one-by-one
-    for (int i=0; i< filenames.count(); i++) {
-
-        if (tableWidget->item(i, STATUS_COLUMN)->text().startsWith(tr("Error"))) {
-            tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("No"));
-            importsErrors++;
-            continue; } // skip errors
-
-        filenames[i].copyOnImport = ImportFile::stringToCopyType(tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->text());
-
-        if (filenames[i].copyOnImport == ALWAYS_IGNORE_ON_IMPORT) {
-
-            addFileToImportExclusionList(filenames[i].name);
-            tableWidget->item(i, STATUS_COLUMN)->setText(tr("Failed - File added to the exclusion list in /imports"));
-            excludedImports++;
-            continue; // skip file requested to be excluded by the user
-        }
-
-        tableWidget->item(i,STATUS_COLUMN)->setText(tr("Saving..."));
-        tableWidget->setCurrentCell(i, STATUS_COLUMN);
+    // SAVE STEP 3A - one-by-one find all the files that should be imported
+    for (int i = 0; i < filenames.count(); i++) {
 
         QApplication::processEvents();
         if (aborted) { done(0); return; }
         this->repaint();
 
+        if (tableWidget->item(i, STATUS_COLUMN)->text().startsWith(tr("Error"))) {
+            tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("No"));
+            importsErrors++;
+            progressBar->setValue(progressBar->value()+1);
+            continue; // skip errors
+        } 
 
-        // SAVE STEP 3 - prepare the new file names for the next steps - basic name and .JSON in GC format
+        filenames[i].copyOnImport = ImportFile::stringToCopyType(tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->text());
 
-        QDateTime ridedatetime = QDateTime(QDate().fromString(tableWidget->item(i,DATE_COLUMN)->text(), Qt::ISODate),
-                                           QTime().fromString(tableWidget->item(i,TIME_COLUMN)->text(), "hh:mm:ss"));
-        QString targetnosuffix = QString ( "%1_%2_%3_%4_%5_%6" )
-                .arg ( ridedatetime.date().year(), 4, 10, zero )
-                .arg ( ridedatetime.date().month(), 2, 10, zero )
-                .arg ( ridedatetime.date().day(), 2, 10, zero )
-                .arg ( ridedatetime.time().hour(), 2, 10, zero )
-                .arg ( ridedatetime.time().minute(), 2, 10, zero )
-                .arg ( ridedatetime.time().second(), 2, 10, zero );
-        QString activitiesTarget = QString ("%1.%2" ).arg ( targetnosuffix ).arg ( "json" );
+        if (filenames[i].copyOnImport == ALWAYS_IGNORE_ON_IMPORT) {
+
+            addFileToImportExclusionList(filenames[i].activityFullSource);
+            tableWidget->item(i, STATUS_COLUMN)->setText(tr("Failed - File added to the exclusion list in /imports"));
+            excludedImports++;
+            progressBar->setValue(progressBar->value()+1);
+            continue; // skip file requested to be excluded by the user
+        }
+
+        tableWidget->item(i, STATUS_COLUMN)->setText(tr("Saving..."));
+        tableWidget->setCurrentCell(i, STATUS_COLUMN);
+
+        // prepare the new file names for the next steps - basic name and .JSON in GC format
+
+        QDateTime ridedatetime = QDateTime(QDate().fromString(tableWidget->item(i, DATE_COLUMN)->text(), Qt::ISODate),
+                                           QTime().fromString(tableWidget->item(i, TIME_COLUMN)->text(), "hh:mm:ss"));
+        QString targetNoSuffix = QString("%1_%2_%3_%4_%5_%6")
+            .arg(ridedatetime.date().year(), 4, 10, zero)
+            .arg(ridedatetime.date().month(), 2, 10, zero)
+            .arg(ridedatetime.date().day(), 2, 10, zero)
+            .arg(ridedatetime.time().hour(), 2, 10, zero)
+            .arg(ridedatetime.time().minute(), 2, 10, zero)
+            .arg(ridedatetime.time().second(), 2, 10, zero);
+        QString activitiesTarget = QString("%1.%2").arg(targetNoSuffix).arg("json");
 
         // create filenames incl. directory path for GC .JSON for both /tmpActivities and /activities directory
         QString tmpActivitiesFulltarget = tmpActivities.canonicalPath() + "/" + activitiesTarget;
@@ -1172,10 +1177,12 @@ RideImportWizard::abortClicked()
 
         // check if a ride at this point of time already exists in /activities - if yes, skip import
         if (QFileInfo(finalActivitiesFulltarget).exists()) {
-            tableWidget->item(i,STATUS_COLUMN)->setText(tr("Failed - Activity already exists in /activities"));
+            tableWidget->item(i, STATUS_COLUMN)->setText(tr("Failed - Activity already exists in /activities"));
             tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
             alreadyExists++;
-            continue; }
+            progressBar->setValue(progressBar->value() + 1);
+            continue;
+        }
 
         // in addition, also check the RideCache for a Ride with the same point in Time in UTC, which also indicates
         // that there was already a ride imported - reason is that RideCache start time is in UTC, while the file Name is in "localTime"
@@ -1185,43 +1192,63 @@ RideImportWizard::abortClicked()
             tableWidget->item(i, STATUS_COLUMN)->setText(tr("Failed - Activity with same start date/time exists in /activities"));
             tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
             alreadyExists++;
-            continue; }
+            progressBar->setValue(progressBar->value() + 1);
+            continue;
+        }
+
+        // Populate attributes for files that can be imported
+        // i.e. no errors, no exclusion, no duplicates in activities
+        ImportFile imFile(filenames[i].activityFullSource, filenames[i].copyOnImport);
+        imFile.tableRow = i;
+        imFile.targetNoSuffix = targetNoSuffix;
+        imFile.ridedatetime = ridedatetime;
+        imFile.targetWithSuffix = activitiesTarget;
+        imFile.tmpActivitiesFulltarget = tmpActivitiesFulltarget;
+        imFile.finalActivitiesFulltarget = finalActivitiesFulltarget;
+        validFilenames.append(imFile);
+    }
+
+    int successfulImports = 0;
+
+    // Saving now - process the files than need to be imported, one-by-one
+    for (int j = 0; j < validFilenames.count(); j++) {
 
         bool srcInImportsDir(true);
         QString importsTarget;
-        QFileInfo sourceFileInfo(filenames[i].name);
+        QFileInfo sourceFileInfo(validFilenames[j].activityFullSource);
 
         // Copy the source file to "/imports" directory (if it's not taken from there as source)
         if (sourceFileInfo.canonicalPath() != homeImports.canonicalPath()) {
             // Add the GC file base name (targetnosuffix) to create unique file names during import (for identification)
             // Note: There should not be 2 ride files with exactly the same time stamp (as this is also not foreseen for the .json)
-            importsTarget = sourceFileInfo.baseName() + "_" + targetnosuffix + "." + sourceFileInfo.suffix();
+            importsTarget = sourceFileInfo.baseName() + "_" + validFilenames[j].targetNoSuffix + "." + sourceFileInfo.suffix();
             srcInImportsDir = false;
         } else
         {
             // file is re-imported from /imports - keep the name for .JSON Source File Tag
             importsTarget = sourceFileInfo.fileName();
         }
-
+        
         // SAVE STEP 4 - open the file with the respective format reader and export as .JSON
         // to track if addRideCache() has caused an error due to bad data we work with a interim directory for the activities
         // -- first   export to /tmpactivities
         // -- second  create RideCache() entry
-        // -- third   move file from /tmpactivities to /activities
-        // -- fourth  copy source file to /imports (if required)
+        // -- third   copy source file to / imports(if required)
+        // -- fourth  move file from /tmpactivities to /activities
+        // -- 
 
         // serialize the file to .JSON
         QStringList errors;
-        QFile thisfile(filenames[i].name);
+        QFile thisfile(validFilenames[j].activityFullSource);
         RideFile *ride(RideFileFactory::instance().openRideFile(context, thisfile, errors));
 
         // did the input file parse ok ? (should be fine here - since it was already checked before - but just in case)
         if (ride) {
 
             // update ridedatetime and set the Source File name
-            ride->setStartTime(ridedatetime);
+            ride->setStartTime(validFilenames[j].ridedatetime);
             ride->setTag("Source Filename", importsTarget);
-            ride->setTag("Filename", activitiesTarget);
+            ride->setTag("Filename", validFilenames[j].targetWithSuffix);
             if (errors.count() > 0)
                 ride->setTag("Import errors", errors.join("\n"));
 
@@ -1229,47 +1256,51 @@ RideImportWizard::abortClicked()
             GlobalContext::context()->rideMetadata->setLinkedDefaults(ride);
 
             // run the processor first... import
-            tableWidget->item(i,STATUS_COLUMN)->setText(tr("Processing..."));
+            tableWidget->item(validFilenames[j].tableRow,STATUS_COLUMN)->setText(tr("Processing..."));
             DataProcessorFactory::instance().autoProcess(ride, "Auto", "Import");
             ride->recalculateDerivedSeries();
 
-            tableWidget->item(i,STATUS_COLUMN)->setText(tr("Saving file..."));
+            tableWidget->item(validFilenames[j].tableRow,STATUS_COLUMN)->setText(tr("Saving file..."));
 
             // serialize
             JsonFileReader reader;
-            QFile target(tmpActivitiesFulltarget);
+            QFile target(validFilenames[j].tmpActivitiesFulltarget);
             if (reader.writeRideFile(context, ride, target)) {
 
                 // now try adding the Ride to the RideCache - since this may fail due to various reason, the activity file
                 // is stored in tmpActivities during this process to understand which file has create the problem when restarting GC
                 // - only after the step was successful the file is moved
                 // to the "clean" activities folder
-                context->athlete->addRide(QFileInfo(tmpActivitiesFulltarget).fileName(),
-                                          tableWidget->rowCount() < 20 ? true : false, // don't signal if mass importing
-                                          true, true);                                 // file is available only in /tmpActivities, so use this one please
 
-                // rideCache is successfully updated, let's move the file to the real /activities
-                if (moveFile(tmpActivitiesFulltarget, finalActivitiesFulltarget)) {
-                    tableWidget->item(i, STATUS_COLUMN)->setText(tr("Import successful - Saved in /activities"));
+                context->athlete->addRide(QFileInfo(validFilenames[j].tmpActivitiesFulltarget).fileName(),
+                                          bool(j == validFilenames.count()-1),    // only signal rideAdded on the last entry when mass importing
+                                          bool(j == validFilenames.count() - 1),  // only signal rideSelected on the last entry when mass importing
+                                          true);                                  // file is available only in /tmpActivities, so use this one please
+
+                // copy the source file to "/imports" directory (if it's not taken from there as source) and copying to /Imports is required
+                copySourceFileToImportDir(validFilenames[j], importsTarget, srcInImportsDir);
+
+                // let's move the file to the real /activities
+                if (moveFile(validFilenames[j].tmpActivitiesFulltarget, validFilenames[j].finalActivitiesFulltarget)) {
+                    tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Import successful - Saved in /activities"));
                     // and correct the path locally stored in Ride Item
-                    context->ride->setFileName(homeActivities.canonicalPath(), activitiesTarget);
+                    if (context->ride) context->ride->setFileName(homeActivities.canonicalPath(), validFilenames[j].targetWithSuffix);
                     // Record the successful import
                     successfulImports++;
-                    // copy the source file to "/imports" directory (if it's not taken from there as source) and copying to /Imports is required
-                    copySourceFileToImportDir(filenames[i], importsTarget, i, srcInImportsDir);
+
                 }   else {
-                    tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - Moving %1 to /activities").arg(activitiesTarget));
-                    tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("No"));
+                    tableWidget->item(validFilenames[j].tableRow,STATUS_COLUMN)->setText(tr("Error - Moving %1 to /activities").arg(validFilenames[j].targetWithSuffix));
+                    tableWidget->item(validFilenames[j].tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("No"));
                     importsErrors++;
                 }
             }   else {
-                tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - .JSON creation failed"));
-                tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
+                tableWidget->item(validFilenames[j].tableRow,STATUS_COLUMN)->setText(tr("Error - .JSON creation failed"));
+                tableWidget->item(validFilenames[j].tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
                 importsErrors++;
             }
         } else {
-            tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - Import of activity file failed"));
-            tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
+            tableWidget->item(validFilenames[j].tableRow,STATUS_COLUMN)->setText(tr("Error - Import of activity file failed"));
+            tableWidget->item(validFilenames[j].tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
             importsErrors++;
         }
 
@@ -1303,6 +1334,9 @@ RideImportWizard::abortClicked()
     } else {
         if (!isActiveWindow()) activateWindow();
     }
+
+    // tidy up as the destructor only gets called when GC is closed gracefully
+    foreach(QString name, deleteMe) QFile(name).remove();
 }
 
 const QString exclusionListName("/GC_Auto_Import_Exclusion_List.txt");
@@ -1318,7 +1352,7 @@ RideImportWizard::isFileExcludedFromImportation(const int i) {
         // Search to see if file to be excluded is already 
         while (!exclusionList.atEnd()) {
             QString line = exclusionList.readLine();
-            if (line.contains(filenames[i].name)) {
+            if (line.contains(filenames[i].activityFullSource)) {
                 filenames[i].copyOnImport = ALWAYS_IGNORE_ON_IMPORT;
                 exclusionList.close();
                 return true;
@@ -1361,7 +1395,7 @@ RideImportWizard::addFileToImportExclusionList(const QString& importExcludedFile
  }
 
 void
-RideImportWizard::copySourceFileToImportDir(const ImportFile& source, const QString& importsTarget, const int i, bool srcInImportsDir) {
+RideImportWizard::copySourceFileToImportDir(const ImportFile& source, const QString& importsTarget, bool srcInImportsDir) {
 
     // Copy the source file to "/imports" directory (if it's not taken from there as source) and copying to /Imports is required           
     if (!srcInImportsDir) {
@@ -1388,26 +1422,27 @@ RideImportWizard::copySourceFileToImportDir(const ImportFile& source, const QStr
                 if (!moveFile(importsFulltarget, importsFulltargetDest)) {
                     // Canot move the file, although it a has same filename as import file, its contents
                     // may differ, so warn the user, this should be an extremely rare error case.
-                    tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Blocked"));
+                    tableWidget->item(source.tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Blocked"));
                     return;
                 }
             }
 
             // copy the source file to /imports with adjusted name
-            QFile sourceFile(source.name);
+            QFile sourceFile(source.activityFullSource);
 
             // Copy imported source file to the /imports directory
             if (sourceFile.copy(importsFulltarget)) {
-                tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Copied"));
+                tableWidget->item(source.tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Copied"));
             }
             else {
-                tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Failed"));
+
+                tableWidget->item(source.tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Failed"));
             }
         } break;
 
         case DO_NOT_COPY_ON_IMPORT: {
             // the file is not required to be copied to imports
-            tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
+            tableWidget->item(source.tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
         } break;
 
         default:
@@ -1416,7 +1451,7 @@ RideImportWizard::copySourceFileToImportDir(const ImportFile& source, const QStr
         }
     } else {
         // the file being imported is the /import directory file ! therefore no action is required.
-        tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Import=>"));
+        tableWidget->item(source.tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Import=>"));
     }
 }
 
@@ -1557,7 +1592,7 @@ void RideDelegate::commitAndCloseTimeEditor()
 }
 
 // user hit tab or return so save away the data to our model
-void RideDelegate::commitAndCloseAutoImportEditor(int index)
+void RideDelegate::commitAndCloseAutoImportEditor(int /* index */)
 {
     QComboBox* comboFileButton = qobject_cast<QComboBox*>(sender());
     emit commitData(comboFileButton);
