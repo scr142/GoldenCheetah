@@ -1267,29 +1267,40 @@ RideImportWizard::abortClicked()
             QFile target(validFilenames[j].tmpActivitiesFulltarget);
             if (reader.writeRideFile(context, ride, target)) {
 
-                // now try adding the Ride to the RideCache - since this may fail due to various reason, the activity file
-                // is stored in tmpActivities during this process to understand which file has create the problem when restarting GC
-                // - only after the step was successful the file is moved
-                // to the "clean" activities folder
-
-                context->athlete->addRide(QFileInfo(validFilenames[j].tmpActivitiesFulltarget).fileName(),
+                // now add the Ride to the RideCache, this step should always be successful as if the filename
+                // already exists it is replaced in RideCache, otherwise the new ride is added to RideCache.
+                context->athlete->rideCache->addRide(validFilenames[j].targetWithSuffix,
                                           bool(j == validFilenames.count()-1),    // only signal rideAdded on the last entry when mass importing
                                           bool(j == validFilenames.count() - 1),  // only signal rideSelected on the last entry when mass importing
-                                          true);                                  // file is available only in /tmpActivities, so use this one please
+                                          true,                                   // file is available only in /tmpActivities, so use this one please
+                                          false);                                 // planned defaulted to false
 
-                // copy the source file to "/imports" directory (if it's not taken from there as source) and copying to /Imports is required
-                copySourceFileToImportDir(validFilenames[j], importsTarget, srcInImportsDir);
+                // Find the ride file that has just been added to rideCache, to confirm all is good
+                RideItem* rideI = context->athlete->rideCache->getRide(validFilenames[j].targetWithSuffix);
 
-                // let's move the file to the real /activities
-                if (moveFile(validFilenames[j].tmpActivitiesFulltarget, validFilenames[j].finalActivitiesFulltarget)) {
-                    tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Import successful - Saved in /activities"));
-                    // and correct the path locally stored in Ride Item
-                    if (context->ride) context->ride->setFileName(homeActivities.canonicalPath(), validFilenames[j].targetWithSuffix);
-                    // Record the successful import
-                    successfulImports++;
+                if (rideI)
+                {                  
+                    // Up until this point the ride file has been stored in /tmpActivities, so that if there was a problem it would be available
+                    // on GC restart to understand the problem, but now it can be copied to /imports and moved to the "clean" /activities folder
 
-                }   else {
-                    tableWidget->item(validFilenames[j].tableRow,STATUS_COLUMN)->setText(tr("Error - Moving %1 to /activities").arg(validFilenames[j].targetWithSuffix));
+                    // copy the source file to "/imports" directory (if it's not taken from there as source) and copying to /Imports is required
+                    copySourceFileToImportDir(validFilenames[j], importsTarget, srcInImportsDir);
+
+                    // let's move the file to the real /activities folder
+                    if (moveFile(validFilenames[j].tmpActivitiesFulltarget, validFilenames[j].finalActivitiesFulltarget)) {
+
+                        rideI->setFileName(homeActivities.canonicalPath(), validFilenames[j].targetWithSuffix);
+
+                        // Record the successful import
+                        tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Import successful - Saved in /activities"));                    
+                        successfulImports++;
+                    } else {
+                        tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Error - Moving %1 to /activities").arg(validFilenames[j].targetWithSuffix));
+                        tableWidget->item(validFilenames[j].tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("No"));
+                        importsErrors++;
+                    }
+                } else {
+                    tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Error - %1 cannot be found in RideCache!").arg(validFilenames[j].targetWithSuffix));
                     tableWidget->item(validFilenames[j].tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("No"));
                     importsErrors++;
                 }
@@ -1335,8 +1346,10 @@ RideImportWizard::abortClicked()
         if (!isActiveWindow()) activateWindow();
     }
 
-    // tidy up as the destructor only gets called when GC is closed gracefully
-    foreach(QString name, deleteMe) QFile(name).remove();
+    // If importation was error free then tidy up, otherwise keep /tmpactivities files for fault finding.
+    if (importsErrors == 0) {
+        foreach(QString name, deleteMe) QFile(name).remove();
+    }
 }
 
 const QString exclusionListName("/GC_Auto_Import_Exclusion_List.txt");
