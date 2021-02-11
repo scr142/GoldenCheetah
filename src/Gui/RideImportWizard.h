@@ -46,6 +46,7 @@ public:
 
     QString activityFullSource;
     importCopyType copyOnImport;
+    bool overwriteableFile;
 
     // These attributes are populated for files that can be imported
     // i.e. no errors, no exclusion, no duplicates in activities
@@ -93,7 +94,7 @@ private slots:
     void abortClicked();
     void cancelClicked();
     void todayClicked(int index);
-    // void overClicked(); // deprecate for this release... XXX
+    void overClicked();
     void activateSave();
 
 private:
@@ -117,11 +118,11 @@ private:
     QTableWidget *tableWidget;
     QTableWidget *directoryWidget;
     QProgressBar *progressBar;
-    QPushButton *abortButton; // also used for save and finish
+    QPushButton *abortButton;  // also used for save and finish
     QPushButton *cancelButton; // cancel when asking for dates
     QComboBox *todayButton;    // set date to today when asking for dates
-    // QCheckBox *overFiles;      // chance to set overwrite when asking for dates // deprecate for this release... XXX
-    // bool overwriteFiles; // flag to overwrite files from checkbox               // deprecate for this release... XXX
+    QCheckBox *overFiles;      // chance to set overwrite when asking for dates
+    bool overwriteFiles;       // flag to overwrite files from checkbox
     Context *context; // caller
     RideAutoImportConfig *importConfig;
 

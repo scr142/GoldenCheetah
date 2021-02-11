@@ -44,10 +44,12 @@
 #include <QMessageBox>
 
 ImportFile::ImportFile() :
-    activityFullSource(""), copyOnImport(COPY_ON_IMPORT) {}
+    activityFullSource(""), overwriteableFile(false),
+    copyOnImport(COPY_ON_IMPORT) {}
 
 ImportFile::ImportFile(const QString& fileName, bool copyFileOnImport) :
-    activityFullSource(fileName), copyOnImport(copyFileOnImport ? COPY_ON_IMPORT : DO_NOT_COPY_ON_IMPORT) {}
+    activityFullSource(fileName), overwriteableFile(false),
+    copyOnImport(copyFileOnImport ? COPY_ON_IMPORT : DO_NOT_COPY_ON_IMPORT) {}
 
 
 importCopyType ImportFile::stringToCopyType(const QString& importString)
@@ -350,14 +352,14 @@ RideImportWizard::init(QList<ImportFile> original, Context * /*mainWindow*/)
     cancelButton = new QPushButton(tr("Cancel"));
     cancelButton->setAutoDefault(false);
     abortButton = new QPushButton(tr("Abort"));
-    //overFiles = new QCheckBox(tr("Overwrite Existing Files"));  // deprecate for this release... XXX
+    overFiles = new QCheckBox(tr("Overwrite Existing Files"));
+
     // initially the cancel, overwrite and today widgets are hidden
     // they only appear whilst we are asking the user for dates
     cancelButton->setHidden(true);
     todayButton->setHidden(true);
-    //overFiles->setHidden(true);  // deprecate for this release... XXX
-    //overwriteFiles = false;
-
+    overFiles->setHidden(true);
+    overwriteFiles = false;
     aborted = false;
 
     // NOTE: abort button morphs into save and finish button later
@@ -366,7 +368,7 @@ RideImportWizard::init(QList<ImportFile> original, Context * /*mainWindow*/)
     // only used when editing dates
     connect(todayButton, SIGNAL(activated(int)), this, SLOT(todayClicked(int)));
     connect(cancelButton, SIGNAL(clicked()), this, SLOT(cancelClicked()));
-    // connect(overFiles, SIGNAL(clicked()), this, SLOT(overClicked()));  // deprecate for this release... XXX
+    connect(overFiles, SIGNAL(clicked()), this, SLOT(overClicked()));
 
     // title & headings
     setWindowTitle(tr("Import Files"));
@@ -465,7 +467,7 @@ RideImportWizard::init(QList<ImportFile> original, Context * /*mainWindow*/)
     buttons->addStretch();
     buttons->addWidget(todayButton);
     buttons->addStretch();
-    // buttons->addWidget(overFiles); // deprecate for this release... XXX
+    buttons->addWidget(overFiles);
     buttons->addWidget(cancelButton);
     buttons->addWidget(abortButton);
 
@@ -877,7 +879,7 @@ RideImportWizard::process()
 
    cancelButton->setHidden(false);
    todayButton->setHidden(false);
-   //overFiles->setHidden(false); // deprecate for this release... XXX
+   overFiles->setHidden(false);
 
    if (needdates == 0) {
       // no need to wait for the user to input dates
@@ -911,11 +913,11 @@ RideImportWizard::process()
    return 0;
 }
 
-//void
-//RideImportWizard::overClicked()
-//{
-    //overwriteFiles = overFiles->isChecked(); //deprecate in this release XXX
-//}
+void
+RideImportWizard::overClicked()
+{
+    overwriteFiles = overFiles->isChecked();
+}
 
 void
 RideImportWizard::activateSave()
@@ -1109,7 +1111,7 @@ RideImportWizard::abortClicked()
     aborted = false;
     cancelButton->setHidden(true);
     todayButton->setHidden(true);
-    //overFiles->setHidden(true);  // deprecate for this release XXX
+    overFiles->setHidden(true);
 
     // now set this fields uneditable again ... yeesh.
     for (int i=0; i <filenames.count(); i++) {
@@ -1126,6 +1128,7 @@ RideImportWizard::abortClicked()
     // Count the number of successfully imported files
 
     int excludedImports = 0;
+    int overwrittenFiles = 0;
     int alreadyExists = 0;
     int importsErrors = 0;
     QList <ImportFile> validFilenames;
@@ -1175,13 +1178,17 @@ RideImportWizard::abortClicked()
         QString tmpActivitiesFulltarget = tmpActivities.canonicalPath() + "/" + activitiesTarget;
         QString finalActivitiesFulltarget = homeActivities.canonicalPath() + "/" + activitiesTarget;
 
-        // check if a ride at this point of time already exists in /activities - if yes, skip import
+        ImportFile imFile;
+        
+        // check if a ride at this point of time already exists in /activities - if yes, skip import if overwrite isn't selected
         if (QFileInfo(finalActivitiesFulltarget).exists()) {
-            tableWidget->item(i, STATUS_COLUMN)->setText(tr("Failed - Activity already exists in /activities"));
-            tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
-            alreadyExists++;
-            progressBar->setValue(progressBar->value() + 1);
-            continue;
+            if (!(imFile.overwriteableFile = overwriteFiles)) {
+                tableWidget->item(i, STATUS_COLUMN)->setText(tr("Failed - Activity already exists in /activities"));
+                tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
+                alreadyExists++;
+                progressBar->setValue(progressBar->value() + 1);
+                continue;
+            }
         }
 
         // in addition, also check the RideCache for a Ride with the same point in Time in UTC, which also indicates
@@ -1189,17 +1196,20 @@ RideImportWizard::abortClicked()
         // which causes problems when importing the same file (for files which do not have time/date in the file name),
         // while the computer has been set to a different time zone
         if (context->athlete->rideCache->getRide(ridedatetime.toUTC())) {
-            tableWidget->item(i, STATUS_COLUMN)->setText(tr("Failed - Activity with same start date/time exists in /activities"));
-            tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
-            alreadyExists++;
-            progressBar->setValue(progressBar->value() + 1);
-            continue;
+            if (!(imFile.overwriteableFile = overwriteFiles)) {
+                tableWidget->item(i, STATUS_COLUMN)->setText(tr("Failed - Activity with same start date/time exists in /activities"));
+                tableWidget->item(i, COPY_ON_IMPORT_COLUMN)->setText(tr("Not Copied"));
+                alreadyExists++;
+                progressBar->setValue(progressBar->value() + 1);
+                continue;
+            }
         }
 
         // Populate attributes for files that can be imported
-        // i.e. no errors, no exclusion, no duplicates in activities
-        ImportFile imFile(filenames[i].activityFullSource, filenames[i].copyOnImport);
-        imFile.tableRow = i;
+        // i.e. no errors or excluded files, and no duplicates (depending on optional overwriteFiles)
+        imFile.tableRow = i; 
+        imFile.activityFullSource = filenames[i].activityFullSource;
+        imFile.copyOnImport = filenames[i].copyOnImport;
         imFile.targetNoSuffix = targetNoSuffix;
         imFile.ridedatetime = ridedatetime;
         imFile.targetWithSuffix = activitiesTarget;
@@ -1217,14 +1227,13 @@ RideImportWizard::abortClicked()
         QString importsTarget;
         QFileInfo sourceFileInfo(validFilenames[j].activityFullSource);
 
-        // Copy the source file to "/imports" directory (if it's not taken from there as source)
+        // If the source file is not in "/imports" directory (if it's not taken from there as source), set up the importTarget
         if (sourceFileInfo.canonicalPath() != homeImports.canonicalPath()) {
             // Add the GC file base name (targetnosuffix) to create unique file names during import (for identification)
             // Note: There should not be 2 ride files with exactly the same time stamp (as this is also not foreseen for the .json)
             importsTarget = sourceFileInfo.baseName() + "_" + validFilenames[j].targetNoSuffix + "." + sourceFileInfo.suffix();
             srcInImportsDir = false;
-        } else
-        {
+        } else {
             // file is re-imported from /imports - keep the name for .JSON Source File Tag
             importsTarget = sourceFileInfo.fileName();
         }
@@ -1292,8 +1301,13 @@ RideImportWizard::abortClicked()
                         rideI->setFileName(homeActivities.canonicalPath(), validFilenames[j].targetWithSuffix);
 
                         // Record the successful import
-                        tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Import successful - Saved in /activities"));                    
-                        successfulImports++;
+                        if (validFilenames[j].overwriteableFile) {
+                            overwrittenFiles++;
+                            tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Import successful - Overwritten in /activities"));
+                        } else {
+                            successfulImports++;
+                            tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Import successful - Saved in /activities"));
+                        }
                     } else {
                         tableWidget->item(validFilenames[j].tableRow, STATUS_COLUMN)->setText(tr("Error - Moving %1 to /activities").arg(validFilenames[j].targetWithSuffix));
                         tableWidget->item(validFilenames[j].tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("No"));
@@ -1328,8 +1342,9 @@ RideImportWizard::abortClicked()
     }
 
     tableWidget->setSortingEnabled(true); // so you can browse through errors etc
-    QString donemessage = QString(tr("Import Complete: %1 successful, %2 already exist, %3 excluded, %4 errors, total of %5 files."))
+    QString donemessage = QString(tr("Import Complete: successful [ newfiles %1, overwritten %2 ]   unsuccessful [ existing skipped %3, excluded %4, errors %5 ]   total of %6 files."))
             .arg(successfulImports, 1, 10, zero)
+            .arg(overwrittenFiles, 1, 10, zero)
             .arg(alreadyExists, 1, 10, zero)
             .arg(excludedImports, 1, 10, zero)
             .arg(importsErrors, 1, 10, zero)
@@ -1418,37 +1433,25 @@ RideImportWizard::copySourceFileToImportDir(const ImportFile& source, const QStr
         case COPY_ON_IMPORT: {
 
             QString importsFulltarget = homeImports.canonicalPath() + "/" + importsTarget;
+            QFile tgt(importsFulltarget);
+            QFile src(source.activityFullSource);
 
             // If a file already exists in the import directory with the same name as import target, then to maintain
-            // the integrity between the activities and import directories, move the exisiting import directory file
-            // to a safe unique name and then store the file actually used for the import.
-            if (QFile::exists(importsFulltarget)) {
-
-                QString suf(QFileInfo(importsTarget).suffix());
-                suf.prepend(".");
-
-                QString importsTargetNoSuffix(QString(importsTarget).remove(suf, Qt::CaseSensitive));
-
-                QString importsFulltargetDest(homeImports.canonicalPath() + "/" + importsTargetNoSuffix +
-                    "_renamed_on_" + (QDateTime::currentDateTime().toString(QString("yyyy-MM-dd-hh-mm-ss"))) + suf);
-
-                if (!moveFile(importsFulltarget, importsFulltargetDest)) {
-                    // Canot move the file, although it a has same filename as import file, its contents
-                    // may differ, so warn the user, this should be an extremely rare error case.
+            // the integrity between the activities and import directories, remove the exisiting import directory file
+            // before copying the new activity file to /imports.
+            if (tgt.exists()) {
+                // delete old target
+                if (!tgt.remove()) {
+                    // tgt is proving immoveable  :(
                     tableWidget->item(source.tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Blocked"));
                     return;
                 }
             }
 
-            // copy the source file to /imports with adjusted name
-            QFile sourceFile(source.activityFullSource);
-
-            // Copy imported source file to the /imports directory
-            if (sourceFile.copy(importsFulltarget)) {
+            // copy src to tgt
+            if (src.copy(importsFulltarget)) {
                 tableWidget->item(source.tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Copied"));
-            }
-            else {
-
+            } else {
                 tableWidget->item(source.tableRow, COPY_ON_IMPORT_COLUMN)->setText(tr("Failed"));
             }
         } break;
@@ -1469,28 +1472,33 @@ RideImportWizard::copySourceFileToImportDir(const ImportFile& source, const QStr
 }
 
 bool
-RideImportWizard::moveFile(const QString &source, const QString &target) {
+RideImportWizard::moveFile(const QString& source, const QString& target) {
 
-    QFile r(source);
+    QFile src(source);
+    QFile tgt(target);
 
-    // first try it with a rename
-    if (r.rename(target)) return true; // job is done
-
-    // now the harder variant (copy & delete)
-    if (r.copy(target))
-      {
-        // try to remove - but if this fails, no problem, file has been copied at least
-        r.remove();
-        // even if remove failed, the copy was successful - so GC is fine
-        return true;
-      }
-
-    // more required ?
-
-    return false;
-
+    if (tgt.exists()) {
+        // move it out of the way
+        if (tgt.rename(target + "_old")) {
+            // move src to tgt
+            if (src.rename(target)) {
+                // delete old target
+                tgt.remove();
+                return true;
+            } else {
+                // failed to move src to tgt, so rename tgt back to original name
+                tgt.rename(target);
+                return false;
+            }
+        } else {
+            // tgt is proving immoveable
+            return false;
+        }
+    } else {
+        // move src to tgt
+        return(src.rename(target));
+    }
 }
-
 
 void
 RideImportWizard::closeEvent(QCloseEvent* event)
